@@ -1808,19 +1808,38 @@ static hint_rating rate_action_disassemble( avatar &you, const item &it )
 
 static hint_rating rate_action_view_recipe( avatar &you, const item &it )
 {
-    const recipe &craft_recipe = it.is_craft() ? it.get_making() :
-                                 recipe_dictionary::get_craft( it.typeId() );
-    if( craft_recipe.is_null() || !craft_recipe.ident().is_valid() ) {
-        return hint_rating::cant;
-    }
     const inventory &inven = you.crafting_inventory();
     const std::vector<npc *> helpers = you.get_crafting_helpers();
-    if( you.get_available_recipes( inven, &helpers ).contains( &craft_recipe ) ) {
-        return hint_rating::good;
-    } else if( craft_recipe.ident().is_valid() ) {
-        return hint_rating::iffy;
+    if( it.is_craft() ) {
+        const recipe &craft_recipe = it.get_making();
+        if( craft_recipe.is_null() || !craft_recipe.ident().is_valid() ) {
+            return hint_rating::cant;
+        } else if( you.get_available_recipes( inven, &helpers ).contains( &craft_recipe ) ) {
+            return hint_rating::good;
+        }
+    } else {
+        itype_id item = it.typeId();
+        bool is_byproduct = false;  // product or byproduct
+        bool can_craft = false;
+        // Does a recipe for the item exist?
+        for( auto it = recipe_dict.begin(); it != recipe_dict.end(); ++it ) {
+            const recipe &r = ( *it ).second;
+            if( !r.obsolete && ( item == r.result() || r.in_byproducts( item ) ) ) {
+                is_byproduct = true;
+                // If if exists, do I know it?
+                if( you.get_available_recipes( inven, &helpers ).contains( &r ) ) {
+                    can_craft = true;
+                    break;
+                }
+            }
+        }
+        if( !is_byproduct ) {
+            return hint_rating::cant;
+        } else if( can_craft ) {
+            return hint_rating::good;
+        }
     }
-    return hint_rating::cant;
+    return hint_rating::iffy;
 }
 
 static hint_rating rate_action_eat( const avatar &you, const item &it )
@@ -3860,11 +3879,6 @@ void game::draw( ui_adaptor &ui )
     if( test_mode ) {
         return;
     }
-
-    //temporary fix for updating visibility for minimap
-    ter_view_p.z = ( u.pos() + u.view_offset ).z;
-    m.build_map_cache( ter_view_p.z );
-    m.update_visibility_cache( ter_view_p.z );
 
     werase( w_terrain );
     void_blink_curses();
@@ -7723,6 +7737,11 @@ look_around_result game::look_around(
                            get_map().get_abs_sub().x(), get_map().get_abs_sub().y(), center.z );
             u.view_offset.z = center.z - u.posz();
             m.invalidate_map_cache( center.z );
+            // Update map and visibility caches at target z-level
+            // Map cache is also built at player z-level to fix player not visible from higher z-levels
+            m.build_map_cache( u.posz() );
+            m.build_map_cache( center.z );
+            m.update_visibility_cache( center.z );
         } else if( action == "TRAVEL_TO" ) {
             const std::optional<std::vector<tripoint_bub_ms>> try_route = safe_route_to( u, lp,
             0,  []( const std::string & msg ) {
@@ -13030,16 +13049,12 @@ int game::slip_down_chance( bool show_messages )
             wet_penalty += u.get_part( bp )->get_wetness_percentage() / 2;
         }
     }
-    if( wet_feet && wet_hands ) {
-        if( show_messages ) {
+    if( show_messages ) {
+        if( wet_feet && wet_hands ) {
             add_msg( m_info, _( "Your wet hands and feet make it harder to climb." ) );
-        }
-    } else if( wet_feet ) {
-        if( show_messages ) {
+        } else if( wet_feet ) {
             add_msg( m_info, _( "Your wet feet make it harder to climb." ) );
-        }
-    } else if( wet_hands ) {
-        if( show_messages ) {
+        } else if( wet_hands ) {
             add_msg( m_info, _( "Your wet hands make it harder to climb." ) );
         }
     }
@@ -13072,20 +13087,14 @@ int game::slip_down_chance( bool show_messages )
     if( stamina_ratio < 0.8 ) {
         slip /= std::max( stamina_ratio, .1f );
 
-        if( stamina_ratio > 0.6 ) {
-            if( show_messages ) {
+        if( show_messages ) {
+            if( stamina_ratio > 0.6 ) {
                 add_msg( m_info, _( "You are winded, which makes climbing harder." ) );
-            }
-        } else if( stamina_ratio > 0.4 ) {
-            if( show_messages ) {
+            } else if( stamina_ratio > 0.4 ) {
                 add_msg( m_info, _( "You are out of breath, which makes climbing much harder." ) );
-            }
-        } else if( stamina_ratio > 0.2 ) {
-            if( show_messages ) {
+            } else if( stamina_ratio > 0.2 ) {
                 add_msg( m_info, _( "You can't catch your breath, which makes it much more difficult to climb." ) );
-            }
-        } else {
-            if( show_messages ) {
+            } else {
                 add_msg( m_info, _( "You feel faint and can't keep your balance." ) );
             }
         }
@@ -13093,20 +13102,14 @@ int game::slip_down_chance( bool show_messages )
     add_msg_debug( debugmode::DF_GAME, "Stamina ratio %.2f, final slip chance %d%%",
                    stamina_ratio, slip );
 
-    if( weight_ratio >= 1 ) {
-        if( show_messages ) {
+    if( show_messages ) {
+        if( weight_ratio >= 1 ) {
             add_msg( m_info, _( "Your carried weight tries to drag you down." ) );
-        }
-    } else if( weight_ratio > .75 ) {
-        if( show_messages ) {
+        } else if( weight_ratio > .75 ) {
             add_msg( m_info, _( "You strain to climb with the weight of your possessions." ) );
-        }
-    } else if( weight_ratio > .5 ) {
-        if( show_messages ) {
+        } else if( weight_ratio > .5 ) {
             add_msg( m_info, _( "You feel the weight of your luggage makes it more difficult to climb." ) );
-        }
-    } else if( weight_ratio > .25 ) {
-        if( show_messages ) {
+        } else if( weight_ratio > .25 ) {
             add_msg( m_info, _( "Your carried weight makes it a little harder to climb." ) );
         }
     }
@@ -13175,108 +13178,111 @@ void game::climb_down( const tripoint &examp )
     add_msg_debug( debugmode::DF_IEXAMINE, "Climb cost %d", climb_cost );
     add_msg_debug( debugmode::DF_IEXAMINE, "Fall damage modifier %.2f", fall_mod );
 
-    {
-        you.set_activity_level( ACTIVE_EXERCISE );
-        weary_mult = 1.0f / you.exertion_adjusted_move_multiplier( ACTIVE_EXERCISE );
+    you.set_activity_level( ACTIVE_EXERCISE );
+    weary_mult = 1.0f / you.exertion_adjusted_move_multiplier( ACTIVE_EXERCISE );
 
-        std::string hint_remaining_fall;
+    std::string hint_remaining_fall;
 
-        if( height > 1 ) {
-            // After grappling or climbing down from a 2+ high ledge, the player will free-fall.
-            // We don't assess the expected damage but this simple warning is provided.
-            hint_remaining_fall = "\n";
-            hint_remaining_fall += string_format( n_gettext(
-                    "Even if you climb down safely, you will fall <color_yellow>at least %d story</color>.",
-                    "Even if you climb down safely, you will fall <color_red>at least %d stories</color>.",
-                    height - 1 ), height - 1 );
+    if( height > 1 ) {
+        // After grappling or climbing down from a 2+ high ledge, the player will free-fall.
+        // We don't assess the expected damage but this simple warning is provided.
+        hint_remaining_fall = "\n";
+        hint_remaining_fall += string_format( n_gettext(
+                "Even if you climb down safely, you will fall <color_yellow>at least %d story</color>.",
+                "Even if you climb down safely, you will fall <color_red>at least %d stories</color>.",
+                height - 1 ), height - 1 );
+    }
+
+    if( can_use_ladder ) {
+        if( !query_yn( _( "Climb down the ladder?" ) ) ) {
+            return;
+        } else {
+            has_grapnel = false;
+            web_rappel = false;
+        }
+    } else if( has_grapnel ) {
+        std::string query = _( "Use your grappling hook to climb down?" );
+        query += "%s";
+        if( !query_yn( query.c_str(), hint_remaining_fall ) ) {
+            has_grapnel = false;
+        } else {
+            web_rappel = false;
+        }
+    }
+
+    if( !can_use_ladder && !has_grapnel ) {
+        std::string query;
+        std::string hint_slip_risk;
+        std::string hint_fall_damage;
+        std::string hint_climb_back;
+        if( web_rappel ) {
+            if( height <= 1 ) {
+                query = _( "Use your webs to descend?" );
+            } else {
+                query = string_format( n_gettext(
+                                           "Looks like % d story.  Nothing your webs can't handle.  Descend?",
+                                           "Looks like %d stories.  Nothing your webs can't handle.  Descend?", height ), height );
+            }
+        } else {
+            // The most common query reads as follows:
+            //   It [seems somewhat risky] to climb down like this.
+            //   Falling [would hurt].
+            //   You [probably won't be able to climb back up].
+            query = "%s%s\n%s\n%s\n";
+            query += _( "Climb down?" );
+
+            // Calculate chance of slipping.  Prints possible causes to log.
+            int slip_chance = slip_down_chance( true );
+
+            // Roughly estimate damage if we should fall.
+            int damage_estimate = 10 * height;
+            if( damage_estimate <= 30 ) {
+                damage_estimate *= fall_mod;
+            } else {
+                damage_estimate *= std::pow( fall_mod, 30.f / damage_estimate );
+            }
+
+            // Rough messaging about safety.  "very small risk" may or may not be zero chance.
+            if( slip_chance < 3 ) {
+                hint_slip_risk = _( "It <color_green>seems safe</color> to climb down like this." );
+            } else if( slip_chance < 8 ) {
+                hint_slip_risk = _( "It <color_yellow>seems a bit tricky</color> to climb down like this." );
+            } else if( slip_chance < 20 ) {
+                hint_slip_risk = _( "It <color_yellow>seems somewhat risky</color> to climb down like this." );
+            } else if( slip_chance < 50 ) {
+                hint_slip_risk = _( "It <color_red>seems very risky</color> to climb down like this." );
+            } else if( slip_chance < 80 ) {
+                hint_slip_risk = _( "It <color_pink>looks like you'll slip</color> if you climb down like this." );
+            } else {
+                hint_slip_risk = _( "It <color_pink>doesn't seem possible to climb down safely</color>." );
+            }
+
+            if( damage_estimate >= 100 ) {
+                hint_fall_damage = _( "Falling <color_pink>would kill you</color>" );
+            } else if( damage_estimate >= 60 ) {
+                hint_fall_damage = _( "Falling <color_pink>could cripple or kill you</color>." );
+            } else if( damage_estimate >= 30 ) {
+                hint_fall_damage = _( "Falling <color_pink>would break bones.</color>." );
+            } else if( damage_estimate >= 15 ) {
+                hint_fall_damage = _( "Falling <color_red>would hurt badly</color>." );
+            } else if( damage_estimate >= 5 ) {
+                hint_fall_damage = _( "Falling <color_red>would hurt</color>." );
+            } else {
+                hint_fall_damage = _( "Falling <color_light_blue>wouldn't hurt much<color>." );
+            }
+
+            if( climb_cost <= 0 ) {
+                hint_climb_back = _( "You <color_red>probably won't be able to climb back up</color>." );
+            } else if( climb_cost < 200 ) {
+                hint_climb_back = _( "You <color_green>should be easily able to climb back up</color>." );
+            } else {
+                hint_climb_back = _( "You <color_yellow>may have problems trying to climb back up</color>." );
+            }
         }
 
-        if( can_use_ladder ) {
-            if( !query_yn( _( "Use the ladder to climb down?" ) ) ) {
-                return;
-            } else {
-                has_grapnel = false;
-                web_rappel = false;
-            }
-        } else if( has_grapnel ) {
-            std::string query = _( "Use your grappling hook to climb down?" );
-            query += "%s";
-            if( !query_yn( query.c_str(), hint_remaining_fall ) ) {
-                has_grapnel = false;
-            } else {
-                web_rappel = false;
-            }
-        }
-
-        if( !can_use_ladder && !has_grapnel ) {
-            std::string query;
-            std::string hint_slip_risk;
-            std::string hint_fall_damage;
-            std::string hint_climb_back;
-            if( web_rappel ) {
-                query = string_format( n_gettext( "Use your webs to descend?",
-                                                  "Looks like %d stories.  Nothing your webs can't handle.  Descend?", height ), height );
-            } else {
-                // The most common query reads as follows:
-                //   It [seems somewhat risky] to climb down like this.
-                //   Falling [would hurt].
-                //   You [probably won't be able to climb back up].
-                query = "%s%s\n%s\n%s\n";
-                query += _( "Climb down?" );
-
-                // Calculate chance of slipping.  Prints possible causes to log.
-                int slip_chance = slip_down_chance( true );
-
-                // Roughly estimate damage if we should fall.
-                int damage_estimate = 10 * height;
-                if( damage_estimate <= 30 ) {
-                    damage_estimate *= fall_mod;
-                } else {
-                    damage_estimate *= std::pow( fall_mod, 30.f / damage_estimate );
-                }
-
-                // Rough messaging about safety.  "very small risk" may or may not be zero chance.
-                if( slip_chance < 3 ) {
-                    hint_slip_risk = _( "It <color_green>seems safe</color> to climb down like this." );
-                } else if( slip_chance < 8 ) {
-                    hint_slip_risk = _( "It <color_yellow>seems a bit tricky</color> to climb down like this." );
-                } else if( slip_chance < 20 ) {
-                    hint_slip_risk = _( "It <color_yellow>seems somewhat risky</color> to climb down like this." );
-                } else if( slip_chance < 50 ) {
-                    hint_slip_risk = _( "It <color_red>seems very risky</color> to climb down like this." );
-                } else if( slip_chance < 80 ) {
-                    hint_slip_risk = _( "It <color_pink>looks like you'll slip</color> if you climb down like this." );
-                } else {
-                    hint_slip_risk = _( "It <color_pink>doesn't seem possible to climb down safely</color>." );
-                }
-
-                if( damage_estimate >= 100 ) {
-                    hint_fall_damage = _( "Falling <color_pink>would kill you</color>" );
-                } else if( damage_estimate >= 60 ) {
-                    hint_fall_damage = _( "Falling <color_pink>could cripple or kill you</color>." );
-                } else if( damage_estimate >= 30 ) {
-                    hint_fall_damage = _( "Falling <color_pink>would break bones.</color>." );
-                } else if( damage_estimate >= 15 ) {
-                    hint_fall_damage = _( "Falling <color_red>would hurt badly</color>." );
-                } else if( damage_estimate >= 5 ) {
-                    hint_fall_damage = _( "Falling <color_red>would hurt</color>." );
-                } else {
-                    hint_fall_damage = _( "Falling <color_light_blue>wouldn't hurt much<color>." );
-                }
-
-                if( climb_cost <= 0 ) {
-                    hint_climb_back = _( "You <color_red>probably won't be able to climb back up</color>." );
-                } else if( climb_cost < 200 ) {
-                    hint_climb_back = _( "You <color_green>should be easily able to climb back up</color>." );
-                } else {
-                    hint_climb_back = _( "You <color_yellow>may have problems trying to climb back up</color>." );
-                }
-            }
-
-            if( !query_yn( query.c_str(),
-                           hint_slip_risk, hint_remaining_fall, hint_fall_damage, hint_climb_back ) ) {
-                return;
-            }
+        if( !query_yn( query.c_str(),
+                       hint_slip_risk, hint_remaining_fall, hint_fall_damage, hint_climb_back ) ) {
+            return;
         }
     }
 
